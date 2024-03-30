@@ -1,1 +1,3 @@
 generated_primes.txt
+out/
+__pycache__/

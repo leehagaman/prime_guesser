@@ -1,9 +1,6 @@
 import os
 import numpy as np
-
 from mpmath import li
-
-import ollama
 
 def get_prime_list(x_min, x_max):
 
@@ -168,43 +165,3 @@ def get_counts_quadruplet_primes(x): return get_counts_k_tuples(x, (0, 2, 6, 8))
 def get_counts_sexy_quadruplet_primes(x): return get_counts_k_tuples(x, (0, 6, 12, 18))
 def get_counts_quintuplet_primes(x): return get_counts_k_tuples(x, (0, 2, 6, 8, 12)) + get_counts_k_tuples(x, (0, 4, 6, 10, 12))
 def get_counts_sextuplet_primes(x): return get_counts_k_tuples(x, (0, 4, 6, 10, 12, 16))
-
-
-def get_llama_primes(prompt, print_stream=False):
-
-    valid_chars = '0123456789, '
-
-    repsonse_str = ""
-
-    if print_stream: print("Printing llama response stream:")
-
-    for part in ollama.generate('llama3:8b-text-fp16', prompt, stream=True):
-
-        part_str = part["response"]
-
-        # check if it contains any letters
-
-        all_valid_chars = True
-        for c in part_str:
-            if c not in valid_chars:
-                all_valid_chars = False
-                break
-
-        if not all_valid_chars:
-            if print_stream: print("stopping, got something other than a number/comma: '", part["response"] + "'")
-            break
-
-        if print_stream: print(part_str, end="")
-        repsonse_str += part_str
-
-        if part["done"]:
-            break
-
-    split_response_strs = repsonse_str.split(",")
-
-    no_punc_split_response_strs = ["".join([c for c in s if c.isdigit()]) for s in split_response_strs]
-
-    nums_str = [int(x) for x in no_punc_split_response_strs]
-
-    return np.array(nums_str)
-

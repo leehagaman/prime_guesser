@@ -1,4 +1,4 @@
 generated_primes.txt
-*.pkl
+llama_cache.pkl
 out/
 __pycache__/

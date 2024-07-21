@@ -14,7 +14,7 @@ def get_prime_list(x_min, x_max):
     with open("generated_primes.txt", "r") as f:
         prime_strs = f.read().splitlines()
 
-    return np.array([int(s) for s in prime_strs])
+    return np.array([int(s) for s in prime_strs if s != ""])
 
 
 def pi(x):
@@ -165,3 +165,39 @@ def get_counts_quadruplet_primes(x): return get_counts_k_tuples(x, (0, 2, 6, 8))
 def get_counts_sexy_quadruplet_primes(x): return get_counts_k_tuples(x, (0, 6, 12, 18))
 def get_counts_quintuplet_primes(x): return get_counts_k_tuples(x, (0, 2, 6, 8, 12)) + get_counts_k_tuples(x, (0, 4, 6, 10, 12))
 def get_counts_sextuplet_primes(x): return get_counts_k_tuples(x, (0, 4, 6, 10, 12, 16))
+
+
+def get_prime_chars(x_min, num_chars):
+    cum_chars = ""
+    curr_x = x_min
+    while len(cum_chars) < num_chars:
+        primes = get_prime_list(curr_x, curr_x*2)
+        for p in primes:
+            cum_chars += str(p)
+            cum_chars += ","
+        curr_x *= 2
+    return cum_chars[:num_chars]
+
+def get_prime_toks(x_min, num_toks):
+    cum_chars = get_prime_chars(x_min, num_toks)
+    ret = []
+    for c in cum_chars:
+        if c == ",":
+            ret.append(10)
+        else:
+            ret.append(int(c))
+    return np.array(ret)
+
+def convert_toks_to_nums(toks):
+
+    num_str = ""
+    for t in toks:
+        if t == 10:
+            num_str += ","
+        else:
+            num_str += str(t)
+
+    split_str = num_str.split(",")
+    non_empty_split_str = [s for s in split_str if s != ""]
+
+    return np.array([int(s) for s in non_empty_split_str])

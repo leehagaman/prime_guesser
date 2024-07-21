@@ -1,5 +1,7 @@
 # used https://github.com/karpathy/nanoGPT/blob/master/train.py as a reference
 
+from prime_functions import get_prime_toks, convert_toks_to_nums
+
 import torch
 print("Pytorch version: ", torch.__version__)
 print("CUDA available: ", torch.cuda.is_available())
@@ -31,14 +33,13 @@ start_prime_x_train = 1
 end_prime_x_train = 2000
 start_prime_x_test = 4001 # make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
 end_prime_x_test = 6000
-train_backwards = False # train to predict the next lower prime rather than the next larger prime
 
 # I/O
 out_dir = 'out'
-eval_interval = 2000
+eval_interval = 1
 log_interval = 1
 eval_iters = 200
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
+always_save_checkpoint = True
 
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
@@ -57,7 +58,7 @@ n_layer = 12
 n_head = 12
 n_embd = 768
 dropout = 0.0
-bias = False # do we use bias inside LayerNorm and Linear layers?
+bias = False
 
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
@@ -73,6 +74,7 @@ warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 
+# using command line arguments to change the above parameters
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 for arg in sys.argv[1:]:
     assert arg.startswith('--')
@@ -85,14 +87,12 @@ for arg in sys.argv[1:]:
         except (SyntaxError, ValueError):
             # if that goes wrong, just use the string
             attempt = val
-        # ensure the types match ok
         assert type(attempt) == type(globals()[key])
-        # cross fingers
         print(f"Overriding: {key} = {attempt}")
         globals()[key] = attempt
     else:
         raise ValueError(f"Unknown config key: {key}")
-config = {k: globals()[k] for k in config_keys} # will be useful for logging
+config = {k: globals()[k] for k in config_keys} # useful for logging
 
 # only support 1 GPU for now
 master_process = True
@@ -112,35 +112,6 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-
-# same as in prime_studies.ipynb
-def get_prime_list(x_min, x_max):
-    # from https://github.com/kimwalisch/primesieve
-    os.system(f"primesieve {x_min} {x_max} -p > generated_primes.txt")
-    with open("generated_primes.txt", "r") as f:
-        prime_strs = f.read().splitlines()
-    return np.array([int(s) for s in prime_strs])
-
-def get_prime_chars(x_min, num_chars):
-    cum_chars = ""
-    curr_x = x_min
-    while len(cum_chars) < num_chars:
-        primes = get_prime_list(curr_x, curr_x*2)
-        for p in primes:
-            cum_chars += str(p)
-            cum_chars += ","
-        curr_x *= 2
-    return cum_chars[:num_chars]
-
-def get_prime_toks(x_min, num_toks):
-    cum_chars = get_prime_chars(x_min, num_toks)
-    ret = []
-    for c in cum_chars:
-        if c == ",":
-            ret.append(10)
-        else:
-            ret.append(int(c))
-    return np.array(ret)
 
 # this generates a batch on the fly
 # might be slower than a pre-generated file, but should be able to handle more data (might have to try both)
@@ -171,23 +142,6 @@ def get_batch(split):
         x, y = x.to(device), y.to(device)
     return x, y
 
-# this gets a batch from a pre-generated file
-"""def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y"""
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -264,6 +218,29 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+        # print example generation
+        model.eval()
+        with torch.no_grad():
+            X, Y = get_batch('val')
+            logits, loss = model(X, Y)
+            preds = logits.argmax(-1)
+            print("truth, pred:")
+            pred_nums = convert_toks_to_nums(preds[0].cpu().numpy())
+            truth_nums = convert_toks_to_nums(Y[0].cpu().numpy())
+            print_len = 10
+            if len(pred_nums) > print_len:
+                pred_nums = pred_nums[:print_len]
+            else:
+                pred_nums = pred_nums + [-1] * (print_len - len(pred_nums))
+            if len(truth_nums) > print_len:
+                truth_nums = truth_nums[:print_len]
+            else:
+                truth_nums = truth_nums + [-1] * (print_len - len(truth_nums))
+            for i in range(print_len):
+                print("    ", truth_nums[i], pred_nums[i])
+        model.train()
+
         if wandb_log:
             wandb.log({
                 "iter": iter_num,

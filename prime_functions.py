@@ -4,15 +4,19 @@ from mpmath import li
 
 def get_prime_list(x_min, x_max):
 
+    #print(f"called get_prime_list({x_min}, {x_max})")
+
     # originally tried to get python bindings from https://github.com/shlomif/primesieve-python
     # didn't work with conda or pip, I think it's just old with limited version compatibilities
     # this method with a file is probably just as good
 
     # from https://github.com/kimwalisch/primesieve
-    os.system(f"primesieve {x_min} {x_max} -p > generated_primes.txt")
+    os.system(f"primesieve {x_min} {x_max} -p > generated_primes_{x_min}_{x_max}.txt")
 
-    with open("generated_primes.txt", "r") as f:
+    with open(f"generated_primes_{x_min}_{x_max}.txt", "r") as f:
         prime_strs = f.read().splitlines()
+
+    os.system(f"rm generated_primes_{x_min}_{x_max}.txt")
 
     return np.array([int(s) for s in prime_strs if s != ""])
 
@@ -171,11 +175,11 @@ def get_prime_chars(x_min, num_chars):
     cum_chars = ""
     curr_x = x_min
     while len(cum_chars) < num_chars:
-        primes = get_prime_list(curr_x, curr_x*2)
+        primes = get_prime_list(curr_x, curr_x + 10_000)
         for p in primes:
             cum_chars += str(p)
             cum_chars += ","
-        curr_x *= 2
+        curr_x += 10_000
     return cum_chars[:num_chars]
 
 def get_prime_toks(x_min, num_toks):

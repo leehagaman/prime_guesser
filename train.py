@@ -26,13 +26,13 @@ torch.manual_seed(1337)
 #     python train.py --batch_size=32
 
 # data
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-batch_size = 12
+gradient_accumulation_steps = 1 # used to simulate larger batch sizes
+batch_size = 128
 block_size = 1024
-start_prime_x_train = 1
-end_prime_x_train = 2000
-start_prime_x_test = 4001 # make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
-end_prime_x_test = 6000
+start_prime_x_train = 100_000
+end_prime_x_train = 500_000
+start_prime_x_test = 600_000 # make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
+end_prime_x_test = 1_000_000
 
 # I/O
 out_dir = 'out'
@@ -54,9 +54,9 @@ computer = "lee_pc"
 gpu = "Nvidia 3090"
 
 # model
-n_layer = 12
-n_head = 12
-n_embd = 768
+n_layer = 8
+n_head = 8
+n_embd = 256
 dropout = 0.0
 bias = False
 
@@ -239,6 +239,7 @@ while True:
                 truth_nums = truth_nums + [-1] * (print_len - len(truth_nums))
             for i in range(print_len):
                 print("    ", truth_nums[i], pred_nums[i])
+            print("done printing truth, pred")
         model.train()
 
         if wandb_log:
@@ -270,7 +271,9 @@ while True:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
+        print("getting next training batch...")
         X, Y = get_batch('train')
+        print("done")
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient

@@ -1,4 +1,4 @@
-generated_primes.txt
+generated_primes*.txt
 llama_cache.pkl
 out/
 __pycache__/

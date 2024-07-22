@@ -300,7 +300,9 @@ class GPT(nn.Module):
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        #flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        # Nvidia 3090 FP16 or FP32 peak flops is 35.58 TFLOPS, https://www.techpowerup.com/gpu-specs/geforce-rtx-3090.c3622
+        flops_promised = 35.58e12
         mfu = flops_achieved / flops_promised
         return mfu
 

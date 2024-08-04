@@ -36,10 +36,10 @@ end_prime_x_test = 1_000_000
 
 # I/O
 out_dir = 'out'
-eval_interval = 4
-log_interval = 1
+eval_interval = 100
+log_interval = 20
 eval_iters = 1
-always_save_checkpoint = True
+always_save_checkpoint = False
 
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
@@ -115,7 +115,8 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # this generates a batch on the fly
 # might be slower than a pre-generated file, but should be able to handle more data (might have to try both)
-def get_batch(split, batch_size=batch_size):
+# this function generates a batch from several non-sequential regions of primes
+def get_batch_nonsequential(split, batch_size=batch_size):
     if split == 'train':
         start = start_prime_x_train
         end = end_prime_x_train
@@ -140,6 +141,38 @@ def get_batch(split, batch_size=batch_size):
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
+    return x, y
+
+# this function generates the batches sequentially, which is faster to generate
+def get_batch(split, batch_size=batch_size):
+    if split == 'train':
+        start = start_prime_x_train
+        end = end_prime_x_train
+    else:
+        start = start_prime_x_test
+        end = end_prime_x_test
+
+    start_point = np.random.randint(start, end)
+
+    x_list = []
+    y_list = []
+    prime_toks = get_prime_toks(start_point, block_size * batch_size + 1)
+
+    for b in range(batch_size):
+        x = prime_toks[b*block_size : (b+1)*block_size]
+        y = prime_toks[b*block_size+1 : (b+1)*block_size+1]
+        x_list.append(x)
+        y_list.append(y)
+
+    x = torch.stack([torch.from_numpy(x_b.astype(np.int64)) for x_b in x_list])
+    y = torch.stack([torch.from_numpy(y_b.astype(np.int64)) for y_b in y_list])
+
+    if device_type == 'cuda':
+        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+
     return x, y
 
 
@@ -209,10 +242,13 @@ t_start_iteration = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 running_mfu = -1.0
 while True:
+
+    t_set_learning_rate_start = time.time()
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+    t_set_learning_rate_end = time.time()
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -220,7 +256,6 @@ while True:
         print(f"    step {iter_num} losses: ", end="", flush=True)
         losses = estimate_loss()
         print(f"train {losses['train']:.4f}, val {losses['val']:.4f}")
-
         
         num_seeds = 5
         num_prints = 10
@@ -267,20 +302,24 @@ while True:
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
+    t_forward_backward_start = time.time()
     for micro_step in range(gradient_accumulation_steps):
         with ctx:
-            print("    forward pass...", end="", flush=True)
+            t_start_forward = time.time()
             logits, loss = model(X, Y)
-            print(" done")
+            t_end_forward = time.time()
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        print("    getting next batch...", end="", flush=True)
+        t_start_get_batch = time.time()
         X, Y = get_batch('train')
-        print(" done")
+        t_end_get_batch = time.time()
         # backward pass, with gradient scaling if training in fp16
-        print("    backward pass...", end="", flush=True)
+        t_start_backward = time.time()
         scaler.scale(loss).backward()
-        print(" done")
+        t_end_backward = time.time()
+    t_forward_backward_end = time.time()
+
+    t_step_start = time.time()
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -290,19 +329,41 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+    t_step_end = time.time()
 
     # timing and logging
     t_end_iteration = time.time()
     dt_iteration = t_end_iteration - t_start_iteration
     t_start_iteration = t_end_iteration
+
+    dt_set_learning_rate = t_set_learning_rate_start - t_set_learning_rate_end
+    dt_forward = t_end_forward - t_start_forward
+    dt_backward = t_end_backward - t_start_backward
+    dt_forward_backward = t_forward_backward_end - t_forward_backward_start
+    dt_get_batch = t_end_get_batch - t_start_get_batch
+    dt_step = t_step_end - t_step_start
+
+    frac_set_learning_rate = dt_set_learning_rate / dt_iteration
+    frac_forward = dt_forward / dt_iteration
+    frac_backward = dt_backward / dt_iteration
+    frac_forward_backward = dt_forward_backward / dt_iteration
+    frac_get_batch = dt_get_batch / dt_iteration
+    frac_step = dt_step / dt_iteration
+
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+        t_loss_calc_start = time.time()
         lossf = loss.item() * gradient_accumulation_steps
+        t_loss_calc_end = time.time()
+        dt_loss_calc = t_loss_calc_end - t_loss_calc_start
+        frac_less_calc = dt_loss_calc / dt_iteration
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_iteration)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_iteration*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        # this only works for loss_estimate with log_interval=1
+        #print(f"    times, set lr: {frac_set_learning_rate*100:.1f}, forward: {frac_forward*100:.1f}%, backward: {frac_backward*100:.1f}%, foward/backward: {frac_forward_backward*100:.1f}, get_batch: {frac_get_batch*100:.1f}%, step: {frac_step*100:.1f}%, loss calc: {frac_less_calc*100:.1f}%")
     iter_num += 1
     local_iter_num += 1
 

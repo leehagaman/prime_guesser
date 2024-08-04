@@ -1,8 +1,11 @@
 import os
 import numpy as np
 from mpmath import li
+import time
 
 def get_prime_list(x_min, x_max):
+
+    #t_get_prime_list_start = time.time()
 
     #print(f"called get_prime_list({x_min}, {x_max})")
 
@@ -17,6 +20,10 @@ def get_prime_list(x_min, x_max):
         prime_strs = f.read().splitlines()
 
     os.system(f"rm generated_primes_{x_min}_{x_max}.txt")
+
+    #t_get_prime_list_end = time.time()
+
+    #print(f"get_prime_list time: {(t_get_prime_list_end - t_get_prime_list_start)*1000:.2f}ms")
 
     return np.array([int(s) for s in prime_strs if s != ""])
 
@@ -171,15 +178,18 @@ def get_counts_quintuplet_primes(x): return get_counts_k_tuples(x, (0, 2, 6, 8, 
 def get_counts_sextuplet_primes(x): return get_counts_k_tuples(x, (0, 4, 6, 10, 12, 16))
 
 
-def get_prime_chars(x_min, num_chars):
+def get_prime_chars(x_min, num_chars, num_primes_step_to_fill_chars=500_000):
+    #get_prime_chars_start = time.time()
     cum_chars = ""
     curr_x = x_min
     while len(cum_chars) < num_chars:
-        primes = get_prime_list(curr_x, curr_x + 10_000)
+        primes = get_prime_list(curr_x, curr_x + num_primes_step_to_fill_chars)
         for p in primes:
             cum_chars += str(p)
             cum_chars += ","
-        curr_x += 10_000
+        curr_x += num_primes_step_to_fill_chars
+    #get_prime_chars_end = time.time()
+    #print(f"get_prime_chars time: {(get_prime_chars_end - get_prime_chars_start)*1000:.2f}ms")
     return cum_chars[:num_chars]
 
 def get_prime_toks(x_min, num_toks):

@@ -1,6 +1,6 @@
 # used https://github.com/karpathy/nanoGPT/blob/master/train.py as a reference
 
-from prime_functions import get_prime_toks, convert_toks_to_nums
+from prime_functions import get_prime_toks, convert_toks_to_nums, convert_nums_to_toks
 
 import torch
 print("Pytorch version: ", torch.__version__)
@@ -27,8 +27,8 @@ torch.manual_seed(1337)
 
 # data
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-batch_size = 128
-block_size = 1024
+batch_size = 512
+block_size = 128
 start_prime_x_train = 100_000
 end_prime_x_train = 500_000
 start_prime_x_test = 600_000 # make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
@@ -36,9 +36,9 @@ end_prime_x_test = 1_000_000
 
 # I/O
 out_dir = 'out'
-eval_interval = 1
+eval_interval = 4
 log_interval = 1
-eval_iters = 200
+eval_iters = 1
 always_save_checkpoint = True
 
 # system
@@ -115,7 +115,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # this generates a batch on the fly
 # might be slower than a pre-generated file, but should be able to handle more data (might have to try both)
-def get_batch(split):
+def get_batch(split, batch_size=batch_size):
     if split == 'train':
         start = start_prime_x_train
         end = end_prime_x_train
@@ -163,9 +163,10 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 
 if compile:
-    print("compiling the model...")
+    print("compiling the model...", end="", flush=True)
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
+    print(" done")
 
 
 @torch.no_grad()
@@ -201,14 +202,13 @@ if wandb_log:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
-
-# training loop
+print("Starting Training Loop")
 X, Y = get_batch('train') # fetch the very first batch
-t0 = time.time()
+t_start_training = time.time()
+t_start_iteration = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 running_mfu = -1.0
 while True:
-
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
@@ -216,30 +216,31 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-        # print example generation
+        print(f"    step {iter_num} losses: ", end="", flush=True)
+        losses = estimate_loss()
+        print(f"train {losses['train']:.4f}, val {losses['val']:.4f}")
+
+        
+        num_seeds = 5
+        num_prints = 10
         model.eval()
         with torch.no_grad():
-            X, Y = get_batch('val')
-            logits, loss = model(X, Y)
-            preds = logits.argmax(-1)
-            print("truth, pred:")
-            pred_nums = convert_toks_to_nums(preds[0].cpu().numpy())
-            truth_nums = convert_toks_to_nums(Y[0].cpu().numpy())
-            print_len = 10
-            if len(pred_nums) > print_len:
-                pred_nums = pred_nums[:print_len]
-            else:
-                pred_nums = pred_nums + [-1] * (print_len - len(pred_nums))
-            if len(truth_nums) > print_len:
-                truth_nums = truth_nums[:print_len]
-            else:
-                truth_nums = truth_nums + [-1] * (print_len - len(truth_nums))
-            for i in range(print_len):
-                print("    ", truth_nums[i], pred_nums[i])
-            print("done printing truth, pred")
+            eval_true_toks, _ = get_batch('val', batch_size=1)
+            eval_true_nums = convert_toks_to_nums(eval_true_toks[0].cpu().numpy())
+            num_eval_true_nums = len(eval_true_nums)
+            seed_nums = eval_true_nums[:num_seeds]
+            seed_toks = torch.from_numpy(np.array(convert_nums_to_toks(seed_nums)).reshape(1, -1)).to(device)
+            true_nums = eval_true_nums[num_seeds:]
+            print("    example generation, seed:", seed_nums)
+            print("    truth, pred:")
+            model_output_toks = model.generate(seed_toks, 100).cpu().numpy()
+            pred_toks = model_output_toks[0, seed_toks.shape[1]:]
+            pred_nums = convert_toks_to_nums(pred_toks)
+            if len(pred_nums) < num_prints:
+                pred_nums = np.concatenate((pred_nums, [-1] * (num_prints - len(pred_nums))))
+            for i in range(num_prints):
+                print("        ", true_nums[i], pred_nums[i])
         model.train()
 
         if wandb_log:
@@ -268,14 +269,18 @@ while True:
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
         with ctx:
+            print("    forward pass...", end="", flush=True)
             logits, loss = model(X, Y)
+            print(" done")
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        print("getting next training batch...")
+        print("    getting next batch...", end="", flush=True)
         X, Y = get_batch('train')
-        print("done")
+        print(" done")
         # backward pass, with gradient scaling if training in fp16
+        print("    backward pass...", end="", flush=True)
         scaler.scale(loss).backward()
+        print(" done")
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -287,17 +292,17 @@ while True:
     optimizer.zero_grad(set_to_none=True)
 
     # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
+    t_end_iteration = time.time()
+    dt_iteration = t_end_iteration - t_start_iteration
+    t_start_iteration = t_end_iteration
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+            mfu = model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_iteration)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_iteration*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
     local_iter_num += 1
 

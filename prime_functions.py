@@ -204,4 +204,23 @@ def convert_toks_to_nums(toks):
     split_str = num_str.split(",")
     non_empty_split_str = [s for s in split_str if s != ""]
 
-    return np.array([int(s) for s in non_empty_split_str])
+    ret = np.array([int(s) for s in non_empty_split_str])
+    # limit each element to C long bounds
+    ret[ret > 2_147_483_647] = 2_147_483_647
+    ret[ret < -2_147_483_648] = -2_147_483_648
+
+    return np.array(ret, dtype=int)
+
+def convert_nums_to_toks(nums):
+
+    num_str = ",".join([str(n) for n in nums])
+
+    ret = []
+    for c in num_str:
+        if c == ",":
+            ret.append(10)
+        else:
+            ret.append(int(c))
+
+    return np.array(ret)
+

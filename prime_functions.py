@@ -2,8 +2,30 @@ import os
 import numpy as np
 from mpmath import li
 import time
+import subprocess
+
 
 def get_prime_list(x_min, x_max):
+
+    #t_get_prime_list_start = time.time()
+
+    #print(f"called get_prime_list({x_min}, {x_max})")
+
+    # originally tried to get python bindings from https://github.com/shlomif/primesieve-python
+    # didn't work with conda or pip, I think it's just old with limited version compatibilities
+    # this method with a file is probably just as good
+
+    # from https://github.com/kimwalisch/primesieve
+    prime_strs = subprocess.run([f"primesieve {x_min} {x_max} -p"], shell=True, capture_output=True, text=True).stdout.splitlines()
+
+    #t_get_prime_list_end = time.time()
+
+    #print(f"get_prime_list time: {(t_get_prime_list_end - t_get_prime_list_start)*1000:.2f}ms")
+
+    return np.array([int(s) for s in prime_strs if s != ""])
+
+
+def get_prime_list_files(x_min, x_max):
 
     #t_get_prime_list_start = time.time()
 

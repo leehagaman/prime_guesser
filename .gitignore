@@ -2,3 +2,4 @@ generated_primes*.txt
 llama_cache.pkl
 out/
 __pycache__/
+.venv/

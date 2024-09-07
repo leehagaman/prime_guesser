@@ -10,7 +10,6 @@ import sys
 import os
 import time
 import math
-import pickle
 from contextlib import nullcontext
 import numpy as np
 from ast import literal_eval
@@ -29,10 +28,13 @@ torch.manual_seed(1337)
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 512
 block_size = 128
-start_prime_x_train = 100_000
-end_prime_x_train = 500_000
-start_prime_x_test = 600_000 # make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
-end_prime_x_test = 1_000_000
+start_prime_x_train = 10_000
+end_prime_x_train = 100_000_000
+
+# if we want separate train and test, make sure there's a bit of a gap here, since it can train on block_size characters after the end_prime_x_train
+# for now, trying training and testing on the same range, since I want a diversity of prime number lengths
+start_prime_x_test = start_prime_x_train
+end_prime_x_test = end_prime_x_train
 
 # I/O
 out_dir = 'out'
@@ -144,7 +146,7 @@ def get_batch_nonsequential(split, batch_size=batch_size):
     return x, y
 
 # this function generates the batches sequentially, which is faster to generate
-def get_batch(split, batch_size=batch_size):
+def get_batch_uniform(split, batch_size=batch_size):
     if split == 'train':
         start = start_prime_x_train
         end = end_prime_x_train
@@ -174,6 +176,11 @@ def get_batch(split, batch_size=batch_size):
         x, y = x.to(device), y.to(device)
 
     return x, y
+
+
+def get_batch_log(split, batch_size=batch_size):
+    # TODO: implement this so it trains on a variety of prime lengths
+    return
 
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -209,7 +216,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            X, Y = get_batch_uniform(split)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()

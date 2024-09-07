@@ -3,3 +3,4 @@ llama_cache.pkl
 out/
 __pycache__/
 .venv/
+wandb/
